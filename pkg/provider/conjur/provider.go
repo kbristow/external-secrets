@@ -18,6 +18,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/cyberark/conjur-api-go/conjurapi"
 	"github.com/cyberark/conjur-api-go/conjurapi/authn"
 	corev1 "k8s.io/api/core/v1"
@@ -26,8 +29,6 @@ import (
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlcfg "sigs.k8s.io/controller-runtime/pkg/client/config"
-	"strings"
-	"time"
 
 	esv1beta1 "github.com/external-secrets/external-secrets/apis/externalsecrets/v1beta1"
 	esmeta "github.com/external-secrets/external-secrets/apis/meta/v1"
@@ -57,14 +58,14 @@ type Provider struct {
 	store            esv1beta1.GenericStore
 	namespace        string
 	corev1           typedcorev1.CoreV1Interface
-	clientApi        ClientApi
+	clientAPI        ClientAPI
 	client           Client
 	clientExpires    bool
 	renewClientAfter time.Time
 }
 
 type Connector struct {
-	NewConjurProvider func(context context.Context, store esv1beta1.GenericStore, kube client.Client, namespace string, corev1 typedcorev1.CoreV1Interface, clientApi ClientApi) (esv1beta1.SecretsClient, error)
+	NewConjurProvider func(context context.Context, store esv1beta1.GenericStore, kube client.Client, namespace string, corev1 typedcorev1.CoreV1Interface, clientApi ClientAPI) (esv1beta1.SecretsClient, error)
 }
 
 // NewClient creates a new Conjur client.
@@ -80,17 +81,17 @@ func (c *Connector) NewClient(_ context.Context, store esv1beta1.GenericStore, k
 		return nil, err
 	}
 
-	return c.NewConjurProvider(context.Background(), store, kube, namespace, clientset.CoreV1(), &ConjurClientApi{})
+	return c.NewConjurProvider(context.Background(), store, kube, namespace, clientset.CoreV1(), &ClientAPIImpl{})
 }
 
-func newConjurProvider(_ context.Context, store esv1beta1.GenericStore, kube client.Client, namespace string, corev1 typedcorev1.CoreV1Interface, clientApi ClientApi) (esv1beta1.SecretsClient, error) {
+func newConjurProvider(_ context.Context, store esv1beta1.GenericStore, kube client.Client, namespace string, corev1 typedcorev1.CoreV1Interface, clientAPI ClientAPI) (esv1beta1.SecretsClient, error) {
 	conjurProvider := &Provider{
 		StoreKind: store.GetObjectKind().GroupVersionKind().Kind,
 		store:     store,
 		kube:      kube,
 		namespace: namespace,
 		corev1:    corev1,
-		clientApi: clientApi,
+		clientAPI: clientAPI,
 	}
 
 	return conjurProvider, nil
@@ -131,7 +132,7 @@ func (p *Provider) GetConjurClient(ctx context.Context) (Client, error) {
 			return nil, fmt.Errorf(errBadServiceAPIKey, secErr)
 		}
 
-		conjur, err := p.clientApi.NewClientFromKey(config,
+		conjur, err := p.clientAPI.NewClientFromKey(config,
 			authn.LoginPair{
 				Login:  conjUser,
 				APIKey: conjAPIKey,
@@ -260,8 +261,8 @@ func (c *Connector) ValidateStore(store esv1beta1.GenericStore) error {
 		if prov.Auth.Jwt.Account == "" {
 			return fmt.Errorf("missing Auth.Jwt.Account")
 		}
-		if prov.Auth.Jwt.ServiceId == "" {
-			return fmt.Errorf("missing Auth.Jwt.ServiceId")
+		if prov.Auth.Jwt.ServiceID == "" {
+			return fmt.Errorf("missing Auth.Jwt.ServiceID")
 		}
 		if prov.Auth.Jwt.ServiceAccountRef == nil && prov.Auth.Jwt.SecretRef == nil {
 			return fmt.Errorf("must specify Auth.Jwt.SecretRef or Auth.Jwt.ServiceAccountRef")
@@ -316,7 +317,7 @@ func (p *Provider) secretKeyRef(ctx context.Context, secretRef *esmeta.SecretKey
 	return valueStr, nil
 }
 
-// configMapKeyRef returns the value of a key in a configmap
+// configMapKeyRef returns the value of a key in a configmap.
 func (p *Provider) configMapKeyRef(ctx context.Context, cmRef *esmeta.SecretKeySelector) (string, error) {
 	configMap := &corev1.ConfigMap{}
 	ref := client.ObjectKey{
@@ -341,7 +342,7 @@ func (p *Provider) configMapKeyRef(ctx context.Context, cmRef *esmeta.SecretKeyS
 	return valueStr, nil
 }
 
-// getCA try retrieve the CA bundle from the provider CABundle or from the CAProvider
+// getCA try retrieve the CA bundle from the provider CABundle or from the CAProvider.
 func (p *Provider) getCA(ctx context.Context, provider *esv1beta1.ConjurProvider) (string, error) {
 	if provider.CAProvider != nil {
 		var ca string
@@ -369,13 +370,12 @@ func (p *Provider) getCA(ctx context.Context, provider *esv1beta1.ConjurProvider
 			}
 		}
 		return ca, nil
-	} else {
-		certBytes, decodeErr := utils.Decode(esv1beta1.ExternalSecretDecodeBase64, []byte(provider.CABundle))
-		if decodeErr != nil {
-			return "", fmt.Errorf(errBadCertBundle, decodeErr)
-		}
-		return string(certBytes), nil
 	}
+	certBytes, decodeErr := utils.Decode(esv1beta1.ExternalSecretDecodeBase64, []byte(provider.CABundle))
+	if decodeErr != nil {
+		return "", fmt.Errorf(errBadCertBundle, decodeErr)
+	}
+	return string(certBytes), nil
 }
 
 func init() {
